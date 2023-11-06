@@ -41,13 +41,15 @@ class sfp_tool_dnstwist(SpiderFootPlugin):
     # Default options
     opts = {
         'pythonpath': "python",
-        'dnstwistpath': ""
+        'dnstwistpath': "",
+        'skipwildcards': True
     }
 
     # Option descriptions
     optdescs = {
         'pythonpath': "Path to Python interpreter to use for DNSTwist. If just 'python' then it must be in your PATH.",
-        'dnstwistpath': "Path to the where the dnstwist.py file lives. Optional."
+        'dnstwistpath': "Path to the where the dnstwist.py file lives. Optional.",
+        'skipwildcards': "Skip TLDs and sub-TLDs that have wildcard DNS."
     }
 
     results = None
@@ -84,11 +86,28 @@ class sfp_tool_dnstwist(SpiderFootPlugin):
             return
 
         if eventData in self.results:
-            self.debug("Skipping " + eventData + " as already scanned.")
+            self.debug(f"Skipping {eventData} as already scanned.")
             return
 
         self.results[eventData] = True
 
+        # Sanitize domain name
+        if not SpiderFootHelpers.sanitiseInput(eventData):
+            self.error("Invalid input, refusing to run.")
+            return
+
+        dom = self.sf.domainKeyword(eventData, self.opts['_internettlds'])
+        if not dom:
+            self.error(f"Could not extract keyword from domain: {eventData}")
+            return
+
+        tld = eventData.split(dom + ".")[-1]
+        # Check if the TLD has wildcards before testing
+        if self.opts['skipwildcards'] and self.sf.checkDnsWildcard(tld):
+            self.debug(f"Wildcard DNS detected on {eventData} TLD: {tld}")
+            return
+
+        # TODO: check dnstwistpath option before trying which()
         dnstwistLocation = which('dnstwist')
         if dnstwistLocation and Path(dnstwistLocation).is_file():
             cmd = ['dnstwist']
@@ -113,11 +132,6 @@ class sfp_tool_dnstwist(SpiderFootPlugin):
                 return
 
             cmd = [self.opts['pythonpath'], exe]
-
-        # Sanitize domain name.
-        if not SpiderFootHelpers.sanitiseInput(eventData):
-            self.error("Invalid input, refusing to run.")
-            return
 
         try:
             p = Popen(cmd + ["-f", "json", "-r", eventData], stdout=PIPE, stderr=PIPE)
